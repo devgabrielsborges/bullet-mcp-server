@@ -16,5 +16,10 @@ email = "dev.gabrielsborges@proton.me"
 requires = [ "hatchling",]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "mcp>=1.12.2",
+]
+
 [project.scripts]
 bullet-mcp-server = "bullet_mcp_server:main"
