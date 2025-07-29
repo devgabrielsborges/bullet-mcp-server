@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "uv",
+      "args": ["sync", "--dev", "--all-extras"],
+      "group": "build",
+      "isBackground": false,
+      "problemMatcher": []
+    },
+    {
+      "label": "Run MCP Server",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "bullet-mcp-server"],
+      "group": "build",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Demo",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "python", "demo_server.py"],
+      "group": "test",
+      "isBackground": false,
+      "problemMatcher": []
+    }
+  ]
+}

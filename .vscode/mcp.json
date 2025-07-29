@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "bullet-mcp-server": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "bullet-mcp-server"]
+    }
+  }
+}
