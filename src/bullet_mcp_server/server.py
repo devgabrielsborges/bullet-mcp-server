@@ -3,7 +3,6 @@ import json
 import math
 import random
 import time
-from typing import Dict, List, Any, Optional
 
 import pybullet as p
 import pybullet_data
@@ -13,35 +12,59 @@ from mcp.server import NotificationOptions, Server
 from pydantic import AnyUrl
 import mcp.server.stdio
 
-# Global PyBullet simulation state
 simulation_state = {
     "physics_client": None,
+    "physics_client_id": None,
+    "instance_counter": 0,
     "objects": {},  # object_id -> object_info
     "simulation_running": False,
     "gravity": [0, 0, -9.81],
     "time_step": 1.0 / 240.0,
     "real_time": True,
     "mode": "DIRECT",  # Track current connection mode
+    "initialized": False,  # Track if client has been properly initialized
 }
 
 server = Server("bullet-mcp-server")
 
 
 def ensure_physics_client():
-    """Ensure PyBullet physics client is initialized."""
+    """
+    Ensure PyBullet physics client is initialized and connected.
+    This maintains a persistent connection across tool calls.
+    """
+    if simulation_state["physics_client"] is not None:
+        # Check if the existing connection is still valid
+        try:
+            # Test the connection by querying the number of bodies
+            p.getNumBodies(physicsClientId=simulation_state["physics_client_id"])
+            return  # Connection is valid, nothing to do
+        except Exception:
+            # Connection is broken, mark as uninitialized
+            simulation_state["physics_client"] = None
+            simulation_state["physics_client_id"] = None
+            simulation_state["initialized"] = False
+
+    # Create new connection if needed
     if simulation_state["physics_client"] is None:
         import os
 
         if os.environ.get("DISPLAY"):
             try:
-                simulation_state["physics_client"] = p.connect(p.GUI)
+                client_id = p.connect(p.GUI)
+                simulation_state["physics_client"] = True  # Mark as connected
+                simulation_state["physics_client_id"] = client_id
                 simulation_state["mode"] = "GUI"
+                simulation_state["instance_counter"] += 1
                 print("Connected to PyBullet in GUI mode")
             except Exception as e:
                 print(f"GUI mode failed ({e}), falling back to DIRECT mode")
                 try:
-                    simulation_state["physics_client"] = p.connect(p.DIRECT)
+                    client_id = p.connect(p.DIRECT)
+                    simulation_state["physics_client"] = True
+                    simulation_state["physics_client_id"] = client_id
                     simulation_state["mode"] = "DIRECT"
+                    simulation_state["instance_counter"] += 1
                     print("Connected to PyBullet in DIRECT mode")
                 except Exception as e2:
                     print(f"Failed to connect in DIRECT mode: {e2}")
@@ -49,27 +72,98 @@ def ensure_physics_client():
         else:
             # No display available, use DIRECT mode
             try:
-                simulation_state["physics_client"] = p.connect(p.DIRECT)
+                client_id = p.connect(p.DIRECT)
+                simulation_state["physics_client"] = True
+                simulation_state["physics_client_id"] = client_id
                 simulation_state["mode"] = "DIRECT"
+                simulation_state["instance_counter"] += 1
                 print("Connected to PyBullet in DIRECT mode (no display)")
             except Exception as e:
                 print(f"Failed to connect in DIRECT mode: {e}")
                 raise e
 
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setGravity(*simulation_state["gravity"])
-        p.setTimeStep(simulation_state["time_step"])
-        p.setRealTimeSimulation(1 if simulation_state["real_time"] else 0)
+        # Initialize the physics world only once
+        if not simulation_state["initialized"]:
+            p.setAdditionalSearchPath(
+                pybullet_data.getDataPath(),
+                physicsClientId=simulation_state["physics_client_id"],
+            )
+            p.setGravity(
+                *simulation_state["gravity"],
+                physicsClientId=simulation_state["physics_client_id"],
+            )
+            p.setTimeStep(
+                simulation_state["time_step"],
+                physicsClientId=simulation_state["physics_client_id"],
+            )
+            p.setRealTimeSimulation(
+                1 if simulation_state["real_time"] else 0,
+                physicsClientId=simulation_state["physics_client_id"],
+            )
 
-        # Load default plane
-        plane_id = p.loadURDF("plane.urdf")
-        simulation_state["objects"][plane_id] = {
-            "name": "ground_plane",
-            "type": "plane",
-            "urdf": "plane.urdf",
-            "position": [0, 0, 0],
-            "orientation": [0, 0, 0, 1],
-        }
+            # Load default plane
+            plane_id = p.loadURDF(
+                "plane.urdf", physicsClientId=simulation_state["physics_client_id"]
+            )
+            simulation_state["objects"][plane_id] = {
+                "name": "ground_plane",
+                "type": "plane",
+                "urdf": "plane.urdf",
+                "position": [0, 0, 0],
+                "orientation": [0, 0, 0, 1],
+            }
+            simulation_state["initialized"] = True
+
+
+def get_physics_client_id():
+    """Get the current physics client ID, ensuring client is initialized."""
+    ensure_physics_client()
+    return simulation_state["physics_client_id"]
+
+
+def reset_simulation_state():
+    """
+    Reset the simulation state without disconnecting the physics client.
+    This removes all objects except the ground plane and resets physics parameters.
+    """
+    ensure_physics_client()
+    client_id = simulation_state["physics_client_id"]
+
+    # Remove all objects except the ground plane
+    objects_to_remove = []
+    for obj_id, obj_info in simulation_state["objects"].items():
+        if obj_info.get("name") != "ground_plane":
+            objects_to_remove.append(obj_id)
+
+    for obj_id in objects_to_remove:
+        try:
+            p.removeBody(obj_id, physicsClientId=client_id)
+            del simulation_state["objects"][obj_id]
+        except Exception:
+            # Object might have already been removed
+            pass
+
+    # Reset physics parameters to defaults
+    p.setGravity(*simulation_state["gravity"], physicsClientId=client_id)
+    p.setTimeStep(simulation_state["time_step"], physicsClientId=client_id)
+    p.setRealTimeSimulation(
+        1 if simulation_state["real_time"] else 0, physicsClientId=client_id
+    )
+
+
+def disconnect_physics_client():
+    """Safely disconnect the physics client and reset state."""
+    if simulation_state["physics_client"] is not None:
+        try:
+            p.disconnect(physicsClientId=simulation_state["physics_client_id"])
+        except Exception:
+            pass  # Ignore errors during disconnect
+
+        simulation_state["physics_client"] = None
+        simulation_state["physics_client_id"] = None
+        simulation_state["initialized"] = False
+        simulation_state["objects"] = {}
+        simulation_state["simulation_running"] = False
 
 
 @server.list_resources()
@@ -190,7 +284,7 @@ async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="create_simulation",
-            description="Initialize or reset the physics simulation",
+            description="Initialize or configure the physics simulation (uses persistent connection)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -206,6 +300,26 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "time_step": {"type": "number", "default": 0.004167},
                     "real_time": {"type": "boolean", "default": True},
+                    "force_reconnect": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Force disconnect and reconnect the physics client",
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="reset_simulation",
+            description="Reset simulation state without disconnecting the physics client",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "keep_objects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": ["ground_plane"],
+                        "description": "List of object names to keep (others will be removed)",
+                    }
                 },
             },
         ),
@@ -451,113 +565,91 @@ async def handle_call_tool(
             gravity = arguments.get("gravity", [0, 0, -9.81])
             time_step = arguments.get("time_step", 1.0 / 240.0)
             real_time = arguments.get("real_time", True)
+            force_reconnect = arguments.get("force_reconnect", False)
 
-            # Disconnect existing client if any
-            if simulation_state["physics_client"] is not None:
-                p.disconnect(simulation_state["physics_client"])
-
-            # Create new physics client with better GUI handling
-            if mode == "GUI":
-                # For GUI mode, add extra safety checks
-                import os
-
-                display_env = os.environ.get("DISPLAY")
-                print(f"DEBUG: DISPLAY environment variable: {display_env}")
-
-                if not display_env:
-                    # Fall back to DIRECT mode if no display available
-                    print(
-                        "No DISPLAY environment variable, falling back to DIRECT mode"
-                    )
-                    try:
-                        simulation_state["physics_client"] = p.connect(p.DIRECT)
-                        simulation_state["mode"] = "DIRECT"
-                        connection_msg = (
-                            "GUI mode requested but no DISPLAY available. "
-                            "Connected in DIRECT mode instead."
-                        )
-                    except Exception as e:
-                        return [
-                            types.TextContent(
-                                type="text",
-                                text=f"Failed to create physics simulation in DIRECT mode: {e}",
-                            )
-                        ]
-                else:
-                    print(
-                        f"DEBUG: Attempting GUI connection with DISPLAY={display_env}"
-                    )
-                    try:
-                        simulation_state["physics_client"] = p.connect(p.GUI)
-                        simulation_state["mode"] = "GUI"
-                        connection_msg = "Connected to PyBullet in GUI mode"
-                        print("DEBUG: GUI connection successful!")
-                    except Exception as e:
-                        print(f"GUI mode failed ({e}), falling back to DIRECT mode")
-                        try:
-                            simulation_state["physics_client"] = p.connect(p.DIRECT)
-                            simulation_state["mode"] = "DIRECT"
-                            connection_msg = (
-                                "GUI mode failed, connected in DIRECT mode instead"
-                            )
-                        except Exception as e2:
-                            return [
-                                types.TextContent(
-                                    type="text",
-                                    text=(
-                                        f"Failed to create physics simulation: "
-                                        f"GUI failed ({e}), DIRECT failed ({e2})"
-                                    ),
-                                )
-                            ]
-            else:
-                # DIRECT mode
-                try:
-                    simulation_state["physics_client"] = p.connect(p.DIRECT)
-                    simulation_state["mode"] = "DIRECT"
-                    connection_msg = "Connected to PyBullet in DIRECT mode"
-                except Exception as e:
-                    return [
-                        types.TextContent(
-                            type="text",
-                            text=f"Failed to create physics simulation in DIRECT mode: {e}",
-                        )
-                    ]
-
-            p.setAdditionalSearchPath(pybullet_data.getDataPath())
-
-            # Set physics parameters
             simulation_state["gravity"] = gravity
             simulation_state["time_step"] = time_step
             simulation_state["real_time"] = real_time
 
-            p.setGravity(*gravity)
-            p.setTimeStep(time_step)
-            p.setRealTimeSimulation(1 if real_time else 0)
+            # Only disconnect if mode change is requested or force_reconnect is True
+            need_reconnect = force_reconnect or (
+                simulation_state["mode"] != mode
+                and simulation_state["physics_client"] is not None
+                and mode
+                != "DIRECT"  # Don't reconnect if requesting DIRECT but currently in GUI
+            )
 
-            # Load default plane
-            plane_id = p.loadURDF("plane.urdf")
-            simulation_state["objects"] = {
-                plane_id: {
-                    "name": "ground_plane",
-                    "type": "plane",
-                    "urdf": "plane.urdf",
-                    "position": [0, 0, 0],
-                    "orientation": [0, 0, 0, 1],
-                }
-            }
+            if need_reconnect:
+                disconnect_physics_client()
+                simulation_state["mode"] = mode
+                # Force creation of new instance
+                ensure_physics_client()
+                connection_msg = (
+                    f"Reconnected PyBullet in {simulation_state['mode']} mode"
+                )
+            else:
+                ensure_physics_client()
+                connection_msg = f"Using persistent PyBullet connection in {simulation_state['mode']} mode"
+
+            client_id = get_physics_client_id()
+
+            # Apply new physics parameters to existing connection
+            p.setGravity(*gravity, physicsClientId=client_id)
+            p.setTimeStep(time_step, physicsClientId=client_id)
+            p.setRealTimeSimulation(1 if real_time else 0, physicsClientId=client_id)
 
             simulation_state["simulation_running"] = True
 
             return [
                 types.TextContent(
                     type="text",
-                    text=f"Created physics simulation: {connection_msg}. Gravity: {gravity}",
+                    text=f"Physics simulation ready: {connection_msg}. Gravity: {gravity}",
+                )
+            ]
+
+        elif name == "reset_simulation":
+            ensure_physics_client()
+            client_id = get_physics_client_id()
+
+            keep_objects = arguments.get("keep_objects", ["ground_plane"])
+
+            # Remove objects not in the keep list
+            objects_to_remove = []
+            for obj_id, obj_info in simulation_state["objects"].items():
+                if obj_info.get("name") not in keep_objects:
+                    objects_to_remove.append(obj_id)
+
+            removed_count = 0
+            for obj_id in objects_to_remove:
+                try:
+                    p.removeBody(obj_id, physicsClientId=client_id)
+                    del simulation_state["objects"][obj_id]
+                    removed_count += 1
+                except Exception:
+                    # Object might have already been removed
+                    pass
+
+            # Reset physics parameters to current state values
+            p.setGravity(*simulation_state["gravity"], physicsClientId=client_id)
+            p.setTimeStep(simulation_state["time_step"], physicsClientId=client_id)
+            p.setRealTimeSimulation(
+                1 if simulation_state["real_time"] else 0, physicsClientId=client_id
+            )
+
+            remaining_objects = list(simulation_state["objects"].keys())
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Simulation reset: removed {removed_count} objects, "
+                    f"kept {len(remaining_objects)} objects. "
+                    f"Physics client remains connected.",
                 )
             ]
 
         elif name == "load_object":
             ensure_physics_client()
+            client_id = get_physics_client_id()
 
             urdf_file = arguments["urdf_file"]
             position = arguments.get("position", [0, 0, 1])
@@ -569,7 +661,13 @@ async def handle_call_tool(
             if len(orientation) == 3:
                 orientation = p.getQuaternionFromEuler(orientation)
 
-            obj_id = p.loadURDF(urdf_file, position, orientation, globalScaling=scaling)
+            obj_id = p.loadURDF(
+                urdf_file,
+                position,
+                orientation,
+                globalScaling=scaling,
+                physicsClientId=client_id,
+            )
 
             simulation_state["objects"][obj_id] = {
                 "name": obj_name,
@@ -844,6 +942,7 @@ async def handle_call_tool(
                 }
 
             elif test_type == "stability":
+                # Tower building test for stability analysis
                 num_blocks = params.get("num_objects", 5)
                 for i in range(num_blocks):
                     obj_id = p.loadURDF(
