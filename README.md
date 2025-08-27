@@ -49,6 +49,24 @@ The server implements comprehensive physics simulation tools:
 - **get_object_info**: Query detailed object state
   - Position, orientation, velocities, and metadata
 
+- **create_quantitative_test_scene**: Create standardized scenes for quantitative physics testing
+  - **collision**: Two spheres for collision analysis and momentum conservation
+  - **friction**: Inclined plane with objects of different friction coefficients
+  - **gravity**: Free fall test with objects of different masses
+  - **stability**: Tower building test for stability analysis
+  - **pendulum**: Simple pendulum for oscillation period measurement
+  - **chain**: Connected objects for constraint testing
+  - **tower**: Multi-level stacking for structural analysis
+
+- **create_qualitative_test_scene**: Create visually diverse scenes for qualitative testing
+  - **showcase**: Organized display of different object types with configurable themes
+  - **stress_test**: Many objects for performance and stability testing
+  - **interactive**: Designed for user interaction with central and surrounding objects
+  - **artistic**: Aesthetically pleasing arrangements
+  - **playground**: Fun, engaging scenes for experimentation
+  - Complexity levels: low, medium, high
+  - Visual themes: colorful, realistic, minimalist, chaotic
+
 - **create_random_scene**: Generate test scenarios
   - Configurable number of objects and area size
   - Random positions, orientations, and colors

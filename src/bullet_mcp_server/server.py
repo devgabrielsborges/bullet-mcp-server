@@ -364,6 +364,74 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["object_id", "position"],
             },
         ),
+        types.Tool(
+            name="create_quantitative_test_scene",
+            description="Create a standardized scene for quantitative physics testing",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "test_type": {
+                        "type": "string",
+                        "enum": [
+                            "collision",
+                            "friction",
+                            "gravity",
+                            "stability",
+                            "pendulum",
+                            "chain",
+                            "tower",
+                        ],
+                        "description": "Type of quantitative test to set up",
+                        "default": "collision",
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": "Test-specific parameters",
+                        "properties": {
+                            "num_objects": {"type": "integer", "default": 5},
+                            "mass": {"type": "number", "default": 1.0},
+                            "friction": {"type": "number", "default": 0.5},
+                            "restitution": {"type": "number", "default": 0.7},
+                        },
+                    },
+                },
+                "required": ["test_type"],
+            },
+        ),
+        types.Tool(
+            name="create_qualitative_test_scene",
+            description="Create a visually diverse scene for qualitative testing and demonstration",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "scene_type": {
+                        "type": "string",
+                        "enum": [
+                            "showcase",
+                            "stress_test",
+                            "interactive",
+                            "artistic",
+                            "playground",
+                        ],
+                        "description": "Type of qualitative scene to create",
+                        "default": "showcase",
+                    },
+                    "complexity": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "Scene complexity level",
+                        "default": "medium",
+                    },
+                    "theme": {
+                        "type": "string",
+                        "enum": ["colorful", "realistic", "minimalist", "chaotic"],
+                        "description": "Visual theme for the scene",
+                        "default": "colorful",
+                    },
+                },
+                "required": ["scene_type"],
+            },
+        ),
     ]
 
 
@@ -694,6 +762,320 @@ async def handle_call_tool(
                 types.TextContent(
                     type="text",
                     text=f"Reset object {obj_id} to position {position}, orientation {orientation}",
+                )
+            ]
+
+        elif name == "create_quantitative_test_scene":
+            ensure_physics_client()
+
+            test_type = arguments["test_type"]
+            params = arguments.get("parameters", {})
+
+            created_objects = []
+            test_info = {}
+
+            if test_type == "collision":
+                sphere1_id = p.loadURDF("sphere_small.urdf", [0, -2, 1], [0, 0, 0, 1])
+                sphere2_id = p.loadURDF("sphere_small.urdf", [0, 2, 1], [0, 0, 0, 1])
+
+                p.resetBaseVelocity(sphere1_id, [0, 5, 0], [0, 0, 0])
+                p.resetBaseVelocity(sphere2_id, [0, -5, 0], [0, 0, 0])
+
+                p.changeVisualShape(sphere1_id, -1, rgbaColor=[1, 0, 0, 1])  # Red
+                p.changeVisualShape(sphere2_id, -1, rgbaColor=[0, 0, 1, 1])  # Blue
+
+                created_objects = [sphere1_id, sphere2_id]
+                test_info = {
+                    "test_type": "collision",
+                    "description": "Two spheres colliding with measurable velocities",
+                    "expected_outcome": "Conservation of momentum",
+                    "measurement_points": [
+                        "before_collision",
+                        "at_collision",
+                        "after_collision",
+                    ],
+                }
+
+            elif test_type == "friction":
+                incline_id = p.loadURDF(
+                    "cube.urdf",
+                    [0, 0, 0.1],
+                    p.getQuaternionFromEuler([0, math.pi / 6, 0]),
+                    globalScaling=5.0,
+                )
+
+                friction_values = [0.1, 0.5, 1.0]
+                for i, friction in enumerate(friction_values):
+                    obj_id = p.loadURDF("cube_small.urdf", [-3 + i, 0, 2], [0, 0, 0, 1])
+                    p.changeDynamics(obj_id, -1, lateralFriction=friction)
+
+                    colors = [[1, 0, 0, 1], [1, 1, 0, 1], [0, 1, 0, 1]]
+                    p.changeVisualShape(obj_id, -1, rgbaColor=colors[i])
+                    created_objects.append(obj_id)
+
+                test_info = {
+                    "test_type": "friction",
+                    "description": "Objects with different friction coefficients on inclined plane",
+                    "friction_values": friction_values,
+                    "expected_outcome": "Different sliding speeds based on friction",
+                    "incline_angle": "30 degrees",
+                }
+
+            elif test_type == "gravity":
+                masses = [0.5, 1.0, 2.0, 5.0]
+                for i, mass in enumerate(masses):
+                    obj_id = p.loadURDF(
+                        "sphere_small.urdf", [i * 0.5, 0, 5], [0, 0, 0, 1]
+                    )
+                    p.changeDynamics(obj_id, -1, mass=mass)
+
+                    intensity = 0.2 + 0.8 * (i / len(masses))
+                    p.changeVisualShape(
+                        obj_id, -1, rgbaColor=[intensity, intensity, intensity, 1]
+                    )
+                    created_objects.append(obj_id)
+
+                test_info = {
+                    "test_type": "gravity",
+                    "description": "Free fall test with different masses",
+                    "masses": masses,
+                    "expected_outcome": "All objects fall at same rate (ignoring air resistance)",
+                    "drop_height": 5.0,
+                }
+
+            elif test_type == "stability":
+                num_blocks = params.get("num_objects", 5)
+                for i in range(num_blocks):
+                    obj_id = p.loadURDF(
+                        "cube_small.urdf", [0, 0, 0.5 + i * 1.0], [0, 0, 0, 1]
+                    )
+
+                    # Slight random offset to test stability
+                    offset = random.uniform(-0.1, 0.1)
+                    p.resetBasePositionAndOrientation(
+                        obj_id, [offset, 0, 0.5 + i * 1.0], [0, 0, 0, 1]
+                    )
+
+                    # Alternate colors
+                    color = [1, 0, 0, 1] if i % 2 == 0 else [0, 0, 1, 1]
+                    p.changeVisualShape(obj_id, -1, rgbaColor=color)
+                    created_objects.append(obj_id)
+
+                test_info = {
+                    "test_type": "stability",
+                    "description": "Tower stability test with stacked blocks",
+                    "num_blocks": num_blocks,
+                    "expected_outcome": "Tower may collapse based on positioning accuracy",
+                }
+
+            elif test_type == "pendulum":
+                # Simple pendulum for oscillation testing
+                # Create anchor point
+                anchor_id = p.loadURDF("cube_small.urdf", [0, 0, 3], [0, 0, 0, 1])
+                p.changeDynamics(anchor_id, -1, mass=0)  # Make it static
+
+                # Create pendulum bob
+                bob_id = p.loadURDF("sphere_small.urdf", [1.5, 0, 1.5], [0, 0, 0, 1])
+
+                # Create constraint (rope)
+                constraint_id = p.createConstraint(
+                    anchor_id,
+                    -1,
+                    bob_id,
+                    -1,
+                    p.JOINT_POINT2POINT,
+                    [0, 0, 0],
+                    [0, 0, 0],
+                    [0, 0, 0],
+                )
+
+                # Set colors
+                p.changeVisualShape(
+                    anchor_id, -1, rgbaColor=[0.5, 0.5, 0.5, 1]
+                )  # Gray anchor
+                p.changeVisualShape(bob_id, -1, rgbaColor=[1, 0, 0, 1])  # Red bob
+
+                created_objects = [anchor_id, bob_id]
+                test_info = {
+                    "test_type": "pendulum",
+                    "description": "Simple pendulum for oscillation period measurement",
+                    "pendulum_length": 1.5,
+                    "expected_outcome": "Periodic oscillation",
+                    "constraint_id": constraint_id,
+                }
+
+            # Store test objects and info
+            for obj_id in created_objects:
+                simulation_state["objects"][obj_id] = {
+                    "name": f"{test_type}_test_object_{obj_id}",
+                    "type": test_type,
+                    "test_info": test_info,
+                }
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Created quantitative test scene: {test_type}\n"
+                    f"Objects created: {created_objects}\n"
+                    f"Test info: {json.dumps(test_info, indent=2)}",
+                )
+            ]
+
+        elif name == "create_qualitative_test_scene":
+            ensure_physics_client()
+
+            scene_type = arguments["scene_type"]
+            complexity = arguments.get("complexity", "medium")
+            theme = arguments.get("theme", "colorful")
+
+            created_objects = []
+            scene_info = {}
+
+            # Define complexity parameters
+            complexity_params = {
+                "low": {"num_objects": 5, "area_size": 3.0, "max_height": 2.0},
+                "medium": {"num_objects": 15, "area_size": 5.0, "max_height": 4.0},
+                "high": {"num_objects": 30, "area_size": 8.0, "max_height": 6.0},
+            }
+
+            params = complexity_params[complexity]
+
+            if scene_type == "showcase":
+                # Organized display of different object types
+                object_types = [
+                    "cube_small.urdf",
+                    "sphere_small.urdf",
+                    "duck_vhacd.urdf",
+                    "teddy_vhacd.urdf",
+                ]
+                positions = [[0, -2, 1], [0, 0, 1], [0, 2, 1], [2, 0, 1]]
+
+                for i, (obj_type, pos) in enumerate(zip(object_types, positions)):
+                    try:
+                        obj_id = p.loadURDF(obj_type, pos, [0, 0, 0, 1])
+
+                        if theme == "colorful":
+                            colors = [
+                                [1, 0, 0, 1],
+                                [0, 1, 0, 1],
+                                [0, 0, 1, 1],
+                                [1, 1, 0, 1],
+                            ]
+                            p.changeVisualShape(obj_id, -1, rgbaColor=colors[i])
+                        elif theme == "realistic":
+                            # Use natural colors
+                            colors = [
+                                [0.8, 0.6, 0.4, 1],
+                                [0.7, 0.7, 0.7, 1],
+                                [1, 1, 0, 1],
+                                [0.6, 0.3, 0.1, 1],
+                            ]
+                            p.changeVisualShape(obj_id, -1, rgbaColor=colors[i])
+
+                        created_objects.append(obj_id)
+                    except:
+                        pass  # Skip objects that fail to load
+
+            elif scene_type == "stress_test":
+                # Many objects for performance testing
+                for i in range(params["num_objects"]):
+                    obj_type = random.choice(["cube_small.urdf", "sphere_small.urdf"])
+
+                    # Random positions in a grid-like pattern
+                    x = (i % 6) * 1.0 - 2.5
+                    y = (i // 6) * 1.0 - 2.5
+                    z = random.uniform(1, params["max_height"])
+
+                    try:
+                        obj_id = p.loadURDF(
+                            obj_type,
+                            [x, y, z],
+                            p.getQuaternionFromEuler(
+                                [
+                                    random.uniform(0, 2 * math.pi),
+                                    random.uniform(0, 2 * math.pi),
+                                    random.uniform(0, 2 * math.pi),
+                                ]
+                            ),
+                        )
+
+                        if theme == "colorful":
+                            color = [
+                                random.random(),
+                                random.random(),
+                                random.random(),
+                                1.0,
+                            ]
+                        elif theme == "chaotic":
+                            # High contrast colors
+                            color = [
+                                random.choice([0, 1]),
+                                random.choice([0, 1]),
+                                random.choice([0, 1]),
+                                1.0,
+                            ]
+                        else:
+                            # Monochrome
+                            intensity = random.uniform(0.2, 0.8)
+                            color = [intensity, intensity, intensity, 1.0]
+
+                        p.changeVisualShape(obj_id, -1, rgbaColor=color)
+                        created_objects.append(obj_id)
+                    except:
+                        pass
+
+            elif scene_type == "interactive":
+                # Scene designed for user interaction
+                # Central large object
+                center_id = p.loadURDF(
+                    "cube.urdf", [0, 0, 1], [0, 0, 0, 1], globalScaling=2.0
+                )
+                p.changeVisualShape(center_id, -1, rgbaColor=[0.5, 0.5, 1.0, 1])
+                created_objects.append(center_id)
+
+                # Surrounding smaller objects in a circle
+                num_surrounding = 8
+                radius = 3.0
+                for i in range(num_surrounding):
+                    angle = (2 * math.pi * i) / num_surrounding
+                    x = radius * math.cos(angle)
+                    y = radius * math.sin(angle)
+
+                    obj_id = p.loadURDF("sphere_small.urdf", [x, y, 0.5], [0, 0, 0, 1])
+
+                    # Color based on position
+                    if theme == "colorful":
+                        hue = i / num_surrounding
+                        color = [hue, 1.0, 1.0 - hue, 1.0]
+                    else:
+                        color = [0.8, 0.8, 0.8, 1.0]
+
+                    p.changeVisualShape(obj_id, -1, rgbaColor=color)
+                    created_objects.append(obj_id)
+
+            # Store scene objects and info
+            scene_info = {
+                "scene_type": scene_type,
+                "complexity": complexity,
+                "theme": theme,
+                "num_objects": len(created_objects),
+                "description": f"Qualitative test scene: {scene_type} with {complexity} complexity",
+            }
+
+            for obj_id in created_objects:
+                simulation_state["objects"][obj_id] = {
+                    "name": f"{scene_type}_{complexity}_object_{obj_id}",
+                    "type": scene_type,
+                    "scene_info": scene_info,
+                }
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Created qualitative test scene: {scene_type}\n"
+                    f"Complexity: {complexity}, Theme: {theme}\n"
+                    f"Objects created: {len(created_objects)}\n"
+                    f"Scene info: {json.dumps(scene_info, indent=2)}",
                 )
             ]
 
